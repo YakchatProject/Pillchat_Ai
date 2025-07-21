@@ -1,0 +1,17 @@
+# 테스트 이미지 제외 (단, 폴더 구조 유지용 .gitkeep은 포함)
+tests/images/*
+!tests/images/.gitkeep
+
+#  민감 정보 제외
+.env
+*.env
+config/secrets.json
+config/*.key
+config/*.pem
+
+# Python 캐시 및 IDE 설정 파일 제외
+__pycache__/
+*.pyc
+.DS_Store
+.idea/
+.vscode/
