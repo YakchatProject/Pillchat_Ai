@@ -8,10 +8,10 @@ ocr_model = PaddleOCR(
     lang='korean',
     det_db_box_thresh=0.6,
     det_db_unclip_ratio=1.5,
-    drop_score=0.3,
-    rec_algorithm='SVTR_LCNet',  # 고성능 인식기
-    rec_image_shape='3, 64, 512',  # 더 큰 글자 이미지 수용
-    max_text_length=50
+    drop_score=0.5,
+    rec_algorithm='CRNN',            
+    rec_image_shape='3, 32, 320',   
+    max_text_length=30                
 )
 
 KEYWORDS = ['학생증', '학번', '대학교', 'Student ID', '학과']
@@ -62,12 +62,16 @@ def validate_student_card(image_path: str) -> dict:
 
 def validate_license_document(image_path: str) -> dict:
     
-    
+    import time
+    start = time.time()
+
     result = ocr_model.ocr(image_path, cls=True)
+
+    print(f"[⏱️ OCR TIME] {time.time() - start:.2f}s")
     lines = [line[1][0] for line in result[0]]
     full_text = ' '.join(lines)
 
-    required_keywords = ['약사', '보건복지부']
+    required_keywords = ['면허증', '보건복지부']
     valid = all(k in full_text for k in required_keywords)
 
     fields = extract_license_fields(lines, full_text)
