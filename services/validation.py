@@ -15,7 +15,13 @@ ocr_model = PaddleOCR(
 )
 
 KEYWORDS = ['학생증', '학번', '대학교', 'Student ID', '학과']
-PHARMACY_KEYWORD = '약학과'
+PHARMACY_KEYWORDS = [
+    '약학과', '약대', '약학대학', '약 사 학 과',
+    '약차과', '약차대점', '약학', '藥學科'  
+]
+
+def has_pharmacy_major(text: str) -> bool:
+    return any(k in text for k in PHARMACY_KEYWORDS)
 
 def is_likely_student_card(text: str) -> bool:
     return any(keyword in text for keyword in KEYWORDS)
@@ -40,13 +46,16 @@ def is_card_like(image_path: str, ocr_result) -> bool:
     density_ok = get_text_density(ocr_result) > 30000
     return aspect_ok or density_ok
 
-def validate_student_card(image_path: str) -> dict:
+def validate_student_card(image_path: str, preprocess: bool = False) -> dict:
+    if preprocess:
+        image_path = preprocess_image(image_path)
+
     result = ocr_model.ocr(image_path, cls=True)
     lines = [line[1][0] for line in result[0]]
     full_text = ' '.join(lines)
 
     is_student_card = is_likely_student_card(full_text)
-    has_pharmacy = PHARMACY_KEYWORD in full_text
+    has_pharmacy = has_pharmacy_major(full_text) 
     looks_like_card = is_card_like(image_path, result)
 
     fields = extract_all_fields_from_lines(lines)
@@ -60,10 +69,14 @@ def validate_student_card(image_path: str) -> dict:
         "fields": fields
     }
 
-def validate_license_document(image_path: str) -> dict:
-    
+
+
+def validate_license_document(image_path: str, preprocess: bool = True) -> dict:
     import time
     start = time.time()
+
+    if preprocess:
+        image_path = preprocess_image(image_path)
 
     result = ocr_model.ocr(image_path, cls=True)
 
@@ -77,7 +90,7 @@ def validate_license_document(image_path: str) -> dict:
     fields = extract_license_fields(lines, full_text)
     if not all([fields['name'], fields['licenseNumber'], fields['issueDate']]):
         valid = False
-        
+
     print("[🔍 OCR Lines]", lines)
     print("[📝 Full Text]", full_text)
 

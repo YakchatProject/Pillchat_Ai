@@ -1,4 +1,3 @@
-# routes/ocr_route.py
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from services.validation import validate_student_card, validate_license_document
 from services.preprocess import preprocess_image
@@ -27,15 +26,11 @@ async def ocr_student(file: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-
-#  전문가 (약사 면허증) OCR 인증
 @router.post("/professional")
 async def ocr_professional(file: UploadFile = File(...)):
     image_path = save_temp_file(file)
     try:
-        preprocessed_path = preprocess_image(image_path)  
-        result = validate_license_document(preprocessed_path)
+        result = validate_license_document(image_path, preprocess=True)
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
