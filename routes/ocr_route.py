@@ -21,9 +21,18 @@ async def ocr_student(file: UploadFile = File(...)):
     image_path = save_temp_file(file)
     try:
         result = validate_student_card_with_fallback(image_path)
+
+        if not result.get("valid"):
+            result["message"] = "인증할 수 없는 학생증입니다."  # ✔ 정상 유효성 실패 메시지
         return result
+
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        import traceback
+        print("[❗예외 발생]", traceback.format_exc())
+        return {
+            "valid": False,
+            "message": "학생증 처리 중 오류가 발생했습니다."  # ✔ 진짜 에러일 경우
+        }
 
 
 
@@ -32,6 +41,8 @@ async def ocr_professional(file: UploadFile = File(...)):
     image_path = save_temp_file(file)
     try:
         result = validate_license_document(image_path)
+        if not result.get("valid"):
+            result["message"] = "인증할 수 없는 면허증입니다."
         return result
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        return {"valid": False, "message": "면허증 처리 중 오류가 발생했습니다."}
