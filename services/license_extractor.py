@@ -1,4 +1,28 @@
 import re
+from datetime import datetime
+
+def extract_issue_date_from_ocr(words: list[str], full_text: str) -> str:
+    candidates = []
+
+    # 단어 3조각 기반으로 가능한 모든 날짜 후보 탐색
+    for i in range(len(words) - 2):
+        y, m, d = words[i:i+3]
+        if re.fullmatch(r'(19|20)\d{2}년', y) and re.fullmatch(r'\d{1,2}월', m) and re.fullmatch(r'\d{1,2}일', d):
+            date_str = f"{y} {m} {d}"
+            try:
+                dt = datetime.strptime(date_str, "%Y년 %m월 %d일")
+                candidates.append(dt)
+            except ValueError:
+                continue
+
+    # 후보 중 가장 최근 날짜 선택
+    if candidates:
+        latest = max(candidates)
+        issue_date = latest.strftime('%Y년 %m월 %d일')
+        return issue_date
+
+    return ''
+
 
 def extract_license_fields(lines: list[str], full_text: str) -> dict:
     name = ''
@@ -7,34 +31,20 @@ def extract_license_fields(lines: list[str], full_text: str) -> dict:
 
     merged_line = ' '.join(lines)
 
-    # 면허번호
+    # 1. 면허번호
     license_match = re.search(r'(?:제)?\s?(\d{4,10})\s?호', merged_line)
     if license_match:
         license_no = license_match.group(1)
 
-    # 발급일자: 3개 조각이 줄 단위로 떨어져 있을 경우 대응
-    for i in range(len(lines) - 2):
-        y, m, d = lines[i:i+3]
-        if re.fullmatch(r'(19|20)\d{2}년', y) and re.fullmatch(r'\d{1,2}월', m) and re.fullmatch(r'\d{1,2}일', d):
-            issue_date = f"{y} {m} {d}"
-            break
+    # 2. 발급일자 (단어 리스트 기준 개선)
+    issue_date = extract_issue_date_from_ocr(lines, full_text)
 
-    # 보조: 전체 텍스트에서 가장 늦은 연도의 날짜 추출
-    if not issue_date:
-        matches = re.findall(r'((19|20)\d{2})년\s?\d{1,2}월\s?\d{1,2}일', full_text)
-        if matches:
-            latest_year = max(matches, key=lambda x: int(x[0]))[0]
-            match = re.search(rf'{latest_year}년\s?\d{{1,2}}월\s?\d{{1,2}}일', full_text)
-            if match:
-                issue_date = match.group()
-                
-    # 이름 정규식 기반 추출)
+    # 3. 이름 추출
     name_match = re.search(r'성\s*명.*?([가-힣]{2,4})', full_text)
-
     if name_match:
         name = name_match.group(1)
     else:
-        # 줄 단위 탐색: '성명'이 포함된 줄에서 후보 이름 추출
+        # 줄 단위에서 '성명' 포함된 줄 처리
         for i in range(len(lines)):
             if '성명' in lines[i] or '성 명' in lines[i]:
                 candidates = re.findall(r'[가-힣]{2,4}', lines[i])
@@ -45,7 +55,7 @@ def extract_license_fields(lines: list[str], full_text: str) -> dict:
             if name:
                 break
 
-        # 보조: 다음 줄의 깨진 조각 시도
+        # 다음 줄 깨짐 보조 처리
         if not name:
             for i in range(len(lines) - 1):
                 if '성명' in lines[i] or '성 명' in lines[i]:
@@ -54,7 +64,7 @@ def extract_license_fields(lines: list[str], full_text: str) -> dict:
                         name = candidate
                         break
 
-    # 5. fallback: 블랙리스트 제외한 첫 의미 있는 단어
+    # 4. fallback 이름 추출 (블랙리스트 제외)
     if not name and any(k in full_text for k in ['성명', '성 명']):
         blacklist = {
             '같이', '면허증', '보건복지부', '보건복제부칭', '금거', '제', '중6', '국장', '교국',
