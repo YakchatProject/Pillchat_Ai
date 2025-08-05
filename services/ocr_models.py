@@ -9,6 +9,7 @@ def create_ocr_model(rec_image_shape: str) -> PaddleOCR:
         drop_score=0.25,
         rec_algorithm='CRNN',
         rec_image_shape=rec_image_shape,
-        max_text_length=30
+        max_text_length=30,
+        show_log=False,
+        use_dilation=True  # 선택
     )
-
