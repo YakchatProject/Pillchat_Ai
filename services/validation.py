@@ -1,5 +1,6 @@
 import re
 import cv2
+import os
 import numpy as np
 from services.ocr_models import create_ocr_model
 from services.image_utils import is_vertical_card, is_card_like
@@ -63,7 +64,29 @@ def extract_all_fields_from_lines(lines: list[str]) -> dict:
         "studentId": extract_student_id_regex(full_text),
         "university": extract_university_regex(full_text),
     }
-    
+
+def merge_lines_by_y(sorted_boxes, y_thresh=10):
+    merged = []
+    current = []
+    prev_y = None
+    for box in sorted_boxes:
+        text = box[1][0]
+        y1 = box[0][0][1]
+        y2 = box[0][2][1]
+        y_center = int((y1 + y2) / 2)
+
+        if prev_y is None or abs(y_center - prev_y) < y_thresh:
+            current.append(text)
+        else:
+            merged.append(' '.join(current))
+            current = [text]
+        prev_y = y_center
+
+    if current:
+        merged.append(' '.join(current))
+    return merged
+
+
 def decide_preprocess_level(image_path: str) -> str:
     img = cv2.imread(image_path)
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
@@ -80,28 +103,43 @@ def apply_preprocess(image_path: str, level: str) -> str:
     img = cv2.imread(image_path)
     if img is None:
         raise FileNotFoundError(f"이미지 파일을 열 수 없음: {image_path}")
+
     if level == 'mild':
         img = cv2.detailEnhance(img, sigma_s=5, sigma_r=0.15)
+
     elif level == 'medium':
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         img = cv2.equalizeHist(gray)
+        img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+
     elif level == 'aggressive':
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        blur = cv2.GaussianBlur(gray, (3, 3), 0)
-        _, img = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    save_path = image_path.replace('.', f'_{level}.')
+        contrast = cv2.convertScaleAbs(gray, alpha=1.7, beta=20)
+        sharpen = cv2.GaussianBlur(contrast, (0, 0), 3)
+        img = cv2.addWeighted(contrast, 1.5, sharpen, -0.5, 0)
+        img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+
+    else:
+        raise ValueError(f"지원하지 않는 전처리 레벨입니다: {level}")
+
+    base, ext = os.path.splitext(image_path)
+    save_path = f"{base}_{level}{ext}"
     cv2.imwrite(save_path, img)
     return save_path
 
 def run_ocr_pipeline(image_path: str, level: str) -> dict:
     processed_path = apply_preprocess(image_path, level) if level != 'none' else image_path
-    rec_shape = '3, 64, 320' if is_vertical_card(processed_path) else '3, 32, 640'
+    rec_shape = '3, 64, 800' if is_vertical_card(processed_path) else '3, 48, 800'
     ocr_model = create_ocr_model(rec_shape)
     result = ocr_model.ocr(processed_path, cls=True)
     visualize_ocr_result(processed_path, result, save_path=processed_path.replace('.', f'_ocr_{level}.'))
+
+    # score ≥ 0.7 + y축 병합
     sorted_result = sorted(result[0], key=lambda box: box[0][0][1])
-    lines = [line[1][0] for line in sorted_result]
-    full_text = correct_typos(''.join(lines).replace(" ", ""))
+    filtered_result = [box for box in sorted_result if box[1][1] >= 0.6]
+    lines = merge_lines_by_y(filtered_result)
+
+    full_text = correct_typos(' '.join(lines))
 
     is_student_card = is_likely_student_card(full_text)
     has_pharmacy = has_pharmacy_major(full_text)
@@ -124,7 +162,7 @@ def run_ocr_pipeline(image_path: str, level: str) -> dict:
 def validate_student_card_with_fallback(image_path: str) -> dict:
     try:
         level = decide_preprocess_level(image_path)
-        result = run_ocr_pipeline(image_path, level)
+        result = run_ocr_pipeline(image_path, level ="aggressive")
         if not result['valid']:
             result['message'] = "인증할 수 없는 학생증입니다."
         return result
