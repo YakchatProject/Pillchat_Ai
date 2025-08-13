@@ -109,15 +109,36 @@ def apply_preprocess(image_path: str, level: str) -> str:
 
     elif level == 'medium':
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        img = cv2.equalizeHist(gray)
-        img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+        eq = cv2.equalizeHist(gray)
+        img = cv2.cvtColor(eq, cv2.COLOR_GRAY2BGR)
 
     elif level == 'aggressive':
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        contrast = cv2.convertScaleAbs(gray, alpha=1.7, beta=20)
-        sharpen = cv2.GaussianBlur(contrast, (0, 0), 3)
-        img = cv2.addWeighted(contrast, 1.5, sharpen, -0.5, 0)
-        img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        enhanced = clahe.apply(gray)
+        blurred = cv2.GaussianBlur(enhanced, (5, 5), 0)
+        _, binary = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        img = cv2.cvtColor(binary, cv2.COLOR_GRAY2BGR)
+        
+    elif level == 'denoise_line':
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        blurred = cv2.GaussianBlur(gray, (3, 3), 0)
+
+        # Sobel X로 세로 경계 강조
+        sobelx = cv2.Sobel(blurred, cv2.CV_64F, 1, 0, ksize=3)
+        abs_sobelx = np.absolute(sobelx)
+        scaled_sobel = np.uint8(255 * abs_sobelx / np.max(abs_sobelx))
+
+        # 세로선만 추출하기 위한 threshold
+        _, thresh = cv2.threshold(scaled_sobel, 120, 255, cv2.THRESH_BINARY)
+
+        # 수직선 모양만 남기기 위한 morphology
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 15))  # 수직선 추출에 특화
+        vertical_lines = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
+
+        # 마스크로 선 영역만 흰색으로 덮기
+        mask = vertical_lines == 255
+        img[mask] = [255, 255, 255]
 
     else:
         raise ValueError(f"지원하지 않는 전처리 레벨입니다: {level}")
@@ -129,7 +150,7 @@ def apply_preprocess(image_path: str, level: str) -> str:
 
 def run_ocr_pipeline(image_path: str, level: str) -> dict:
     processed_path = apply_preprocess(image_path, level) if level != 'none' else image_path
-    rec_shape = '3, 64, 800' if is_vertical_card(processed_path) else '3, 48, 800'
+    rec_shape = '3, 64, 600' if is_vertical_card(processed_path) else '3, 64, 600'
     ocr_model = create_ocr_model(rec_shape)
     result = ocr_model.ocr(processed_path, cls=True)
     visualize_ocr_result(processed_path, result, save_path=processed_path.replace('.', f'_ocr_{level}.'))
@@ -160,14 +181,33 @@ def run_ocr_pipeline(image_path: str, level: str) -> dict:
     }
 
 def validate_student_card_with_fallback(image_path: str) -> dict:
-    try:
-        level = decide_preprocess_level(image_path)
-        result = run_ocr_pipeline(image_path, level ="aggressive")
-        if not result['valid']:
-            result['message'] = "인증할 수 없는 학생증입니다."
-        return result
-    except Exception as e:
-        return {"valid": False, "message": "학생증 처리 중 오류가 발생했습니다.", "error": str(e)}
+    """
+    다양한 전처리 레벨을 시도하고, 가장 인식이 잘 된 결과(valid + text_length 기준)를 반환.
+    """
+    candidates = ['mild', 'medium', 'aggressive', 'denoise_line']
+    results = []
+
+    for level in candidates:
+        try:
+            processed_path = apply_preprocess(image_path, level)
+            result = run_ocr_pipeline(processed_path, level)
+            result['preprocess_level'] = level  # 나중에 디버깅용으로 레벨 정보도 포함
+            results.append(result)
+        except Exception as e:
+            continue  # 이 레벨 실패하면 무시
+
+    if not results:
+        return {
+            "valid": False,
+            "message": "전처리 및 OCR 실패: 인식 가능한 결과가 없습니다."
+        }
+
+    # 1순위: valid=True / 2순위: 텍스트 길이
+    best = max(results, key=lambda r: (r['valid'], r['text_length']))
+
+    if not best['valid']:
+        best['message'] = "인증할 수 없는 학생증입니다."
+    return best
 
 
 def validate_license_document(image_path: str, preprocess: bool = True) -> dict:
