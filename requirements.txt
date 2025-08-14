@@ -2,7 +2,5 @@ fastapi
 uvicorn
 pillow
 python-multipart
-paddleocr==2.7.3
-paddlepaddle==2.5.1
-torch==2.2.2+cpu
-numpy==1.26.4
+python-dotenv
+requests
