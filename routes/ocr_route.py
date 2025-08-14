@@ -1,48 +1,63 @@
-from fastapi import APIRouter, UploadFile, File, HTTPException
-from services.validation import validate_license_document, validate_student_card_with_fallback
+import os
 import tempfile
 import shutil
-
-
+from fastapi import APIRouter, UploadFile, File, HTTPException, Header
+from fastapi.responses import JSONResponse
+from services.validation import (
+    validate_student_card_with_fallback,
+    validate_license_document,
+)
 
 router = APIRouter(prefix="/ocr")
 
-def save_temp_file(upload_file: UploadFile) -> str:
-    suffix = upload_file.filename.split(".")[-1]
-    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=f".{suffix}")
-    with temp_file as f:
-        shutil.copyfileobj(upload_file.file, f)
-    return temp_file.name
+# 내부 통신 토큰 (Spring Boot → FastAPI)
+OCR_TOKEN = os.getenv("OCR_SERVICE_TOKEN")
 
+
+def _auth_or_raise(authorization: str | None):
+    """Authorization: Bearer <token> 검사. 토큰이 설정된 경우에만 강제."""
+    if not OCR_TOKEN:
+        # 토큰 미설정이면 인증을 스킵(개발/로컬)
+        return
+    if authorization:
+        scheme, _, token = authorization.partition(" ")
+        if scheme.lower() == "bearer" and token == OCR_TOKEN:
+            return
+    raise HTTPException(status_code=401, detail="Unauthorized")
 
 
 @router.post("/student")
-async def ocr_student(file: UploadFile = File(...)):
-    image_path = save_temp_file(file)
+async def ocr_student(
+    file: UploadFile = File(...),
+    authorization: str | None = Header(default=None),
+):
+    _auth_or_raise(authorization)
     try:
-        result = validate_student_card_with_fallback(image_path)
-
-        if not result.get("valid"):
-            result["message"] = "인증할 수 없는 학생증입니다."  # ✔ 정상 유효성 실패 메시지
-        return result
-
+        # 업로드 파일 임시 저장
+        with tempfile.NamedTemporaryFile(delete=False, suffix=f"_{file.filename}") as tmp:
+            shutil.copyfileobj(file.file, tmp)
+            temp_path = tmp.name
+        result = validate_student_card_with_fallback(temp_path)
+        return JSONResponse(content=result)
+    except HTTPException:
+        raise
     except Exception as e:
-        import traceback
-        print("[❗예외 발생]", traceback.format_exc())
-        return {
-            "valid": False,
-            "message": "학생증 처리 중 오류가 발생했습니다."  # ✔ 진짜 에러일 경우
-        }
-
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/professional")
-async def ocr_professional(file: UploadFile = File(...)):
-    image_path = save_temp_file(file)
+async def ocr_professional(
+    file: UploadFile = File(...),
+    authorization: str | None = Header(default=None),
+):
+    _auth_or_raise(authorization)
     try:
-        result = validate_license_document(image_path)
-        if not result.get("valid"):
-            result["message"] = "인증할 수 없는 면허증입니다."
-        return result
+        with tempfile.NamedTemporaryFile(delete=False, suffix=f"_{file.filename}") as tmp:
+            shutil.copyfileobj(file.file, tmp)
+            temp_path = tmp.name
+        result = validate_license_document(temp_path)
+        return JSONResponse(content=result)
+    except HTTPException:
+        raise
     except Exception as e:
-        return {"valid": False, "message": "면허증 처리 중 오류가 발생했습니다."}
+        raise HTTPException(status_code=500, detail=str(e))
