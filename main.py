@@ -14,11 +14,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-@app.get("/health")
-def health():
-    """간단한 헬스 체크 엔드포인트"""
-    return {"status": "ok"}
-
 # 라우터 등록
 app.include_router(ocr_router)
 
