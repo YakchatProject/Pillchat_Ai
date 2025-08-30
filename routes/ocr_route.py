@@ -5,14 +5,12 @@ from typing import Optional
 
 from fastapi import APIRouter, UploadFile, File, HTTPException, Header
 
-from services.validation import (
-    validate_student_card_simple,
-    validate_license_document,
-)
+from services.verify_student import validate_student_card
+from services.verify_license import validate_license_document
 
 router = APIRouter(prefix="/ocr")
 
-OCR_INTERNAL_TOKEN = os.getenv("OCR_INTERNAL_TOKEN", "")  # 있으면 Authorization 검사
+OCR_INTERNAL_TOKEN = os.getenv("OCR_INTERNAL_TOKEN", "") 
 
 def verify_internal_token(authorization: Optional[str]) -> None:
     if not OCR_INTERNAL_TOKEN:
@@ -26,48 +24,38 @@ def verify_internal_token(authorization: Optional[str]) -> None:
 @router.post("/student")
 async def ocr_student(file: UploadFile = File(...), authorization: Optional[str] = Header(None)):
     verify_internal_token(authorization)
-
     if not file.filename:
         raise HTTPException(status_code=400, detail="파일명이 없습니다.")
-    allowed = {"image/jpeg", "image/jpg", "image/png"}
-    if file.content_type not in allowed:
-        raise HTTPException(status_code=400, detail="지원하지 않는 파일 형식입니다. (JPG, PNG만 가능)")
-
-    path = None
+    if file.content_type not in {"image/jpeg", "image/jpg", "image/png"}:
+        raise HTTPException(status_code=400, detail="지원하지 않는 파일 형식입니다.")
+    path = save_temp_file(file)
     try:
-        path = save_temp_file(file)
-        result = validate_student_card_simple(path)
+        result = validate_student_card(path)
+        result.setdefault("fields", {"name": "", "studentId": "", "university": ""})
+        result.setdefault("documentType", "student")
         if not result.get("valid") and "오류" not in result.get("message", ""):
             result["message"] = "인증할 수 없는 학생증입니다."
         return result
-    except Exception as e:
-        return {"valid": False, "message": "학생증 처리 중 오류가 발생했습니다.", "error_detail": str(e), "ocr_engine": "clova"}
     finally:
-        if path:
-            cleanup_temp_file(path)
+        cleanup_temp_file(path)
 
 @router.post("/professional")
 async def ocr_professional(file: UploadFile = File(...), authorization: Optional[str] = Header(None)):
     verify_internal_token(authorization)
-
     if not file.filename:
         raise HTTPException(status_code=400, detail="파일명이 없습니다.")
-    allowed = {"image/jpeg", "image/jpg", "image/png"}
-    if file.content_type not in allowed:
-        raise HTTPException(status_code=400, detail="지원하지 않는 파일 형식입니다. (JPG, PNG만 가능)")
-
-    path = None
+    if file.content_type not in {"image/jpeg", "image/jpg", "image/png"}:
+        raise HTTPException(status_code=400, detail="지원하지 않는 파일 형식입니다.")
+    path = save_temp_file(file)
     try:
-        path = save_temp_file(file)
         result = validate_license_document(path)
+        result.setdefault("fields", {"name": "", "licenseNumber": "", "issueDate": ""})
+        result.setdefault("documentType", "license")
         if not result.get("valid") and "오류" not in result.get("message", ""):
             result["message"] = "인증할 수 없는 면허증입니다."
         return result
-    except Exception as e:
-        return {"valid": False, "message": "면허증 처리 중 오류가 발생했습니다.", "error_detail": str(e), "ocr_engine": "clova"}
     finally:
-        if path:
-            cleanup_temp_file(path)
+        cleanup_temp_file(path)
 
 @router.get("/health")
 async def health_check():
