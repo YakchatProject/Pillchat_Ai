@@ -4,7 +4,7 @@ from services.common_ocr import (
     clova_ocr, visualize_ocr_result, visualize_save_path,
     correct_typos, is_likely_student_card, has_pharmacy_major,
     merge_lines_by_y, extract_name_heuristic,
-    extract_student_id_regex, extract_university_regex,
+    extract_student_id_regex, extract_university_regex,extract_department_regex,
 )
 
 def extract_fields_simple(lines: List[str]) -> Dict:
@@ -13,6 +13,7 @@ def extract_fields_simple(lines: List[str]) -> Dict:
         "name": extract_name_heuristic(full_text, lines),
         "studentId": extract_student_id_regex(full_text),
         "university": extract_university_regex(full_text),
+        "department": extract_department_regex(full_text),
     }
 
 def validate_student_card(image_path: str) -> Dict:
