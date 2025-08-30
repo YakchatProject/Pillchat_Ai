@@ -69,7 +69,14 @@ def _kname_candidates_from_line(line: str) -> List[str]:
     return re.findall(r"[가-힣]{2,4}", line)
 
 def _is_bad_name_token(token: str) -> bool:
-    return token in NAME_STOPWORDS
+    # stopwords 사전 매칭
+    if token in NAME_STOPWORDS:
+        return True
+    # 대학/대학교/학부/학과 등으로 끝나는 경우 제외
+    if re.search(r"(대학교|대학원|대학|학과|학부)$", token):
+        return True
+    return False
+
 
 def extract_name_heuristic(text: str, lines: List[str]) -> str:
     KEYWORDS_NEG = ("학생증", "대학교", "대학", "학과", "총장", "UNIVERSITY", "College", "Department")
@@ -104,9 +111,55 @@ def extract_student_id_regex(text: str) -> str:
     m = re.search(r"20[0-9]{6,8}", cleaned)
     return m.group(0) if m else ""
 
+
+
 def extract_university_regex(text: str) -> str:
     m = re.search(r"[가-힣]{2,10}대학교|[A-Z]{2,}\s+UNIVERSITY", text, re.IGNORECASE)
     return m.group(0) if m else ""
+
+def extract_department_regex(text: str) -> str:
+    t = correct_typos(text)
+
+    # 1) 한글 후보 수집
+    #    예) 약학과, 컴퓨터공학과, 경영학부, 약학대학, 약학대학원
+    cand_iter = re.finditer(r"[가-힣A-Za-z]{2,30}(학과|전공|학부|대학|대학원)", t)
+    cands = [m.group(0) for m in cand_iter]
+
+    def rank(dep: str) -> tuple:
+        # 랭크 키: (약학 포함 우선, 세부도 우선, 길이 음수로 긴 것 우선)
+        has_pharm = ("약학" in dep)
+        # 상세도 점수: 학과/전공(0) < 학부(1) < 대학/대학원(2)
+        if dep.endswith(("학과", "전공")):
+            detail = 0
+        elif dep.endswith("학부"):
+            detail = 1
+        else:  # 대학/대학원
+            detail = 2
+        return (0 if has_pharm else 1, detail, -len(dep))
+
+    if cands:
+        cands.sort(key=rank)
+        best = cands[0]
+        return best
+
+    # 2) 영문 표현 처리
+    m = re.search(r"(College|School|Faculty)\s+of\s+(Pharmacy|Pharmaceutical\w*)", t, re.IGNORECASE)
+    if m:
+        # 한국어 통일 명칭으로 반환
+        if re.search(r"Graduate|Postgraduate|Graduate School", t, re.IGNORECASE):
+            return "약학대학원"
+        return "약학대학"
+
+    # 3) 키워드 기반 폴백
+    if "약학대학" in t:
+        return "약학대학"
+    if re.search(r"\bPHARMACY\b", t, re.IGNORECASE):
+        return "약학과"
+    if has_pharmacy_major(t):
+        # 약학 키워드가 확인되면 최소 '약학과'로 폴백
+        return "약학과"
+
+    return ""
 
 def collapse_spaced_hangul(seq: str) -> str:
 

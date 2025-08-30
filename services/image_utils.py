@@ -119,3 +119,53 @@ def is_card_like_student(image_path: str, ocr_result) -> bool:
 # (하위 호환) 기존 이름이 이미 사용 중이면 아래 alias 유지
 def is_card_like(image_path: str, ocr_result) -> bool:
     return is_card_like_student(image_path, ocr_result)
+
+_STUDENT_KWS = ("학생증", "학번", "대학교", "STUDENT", "STUDENT ID", "UNIVERSITY", "DEPARTMENT", "학과")
+
+def ensure_landscape_for_student(path: str, ocr_lines_fn) -> str:
+    """
+    학생증 입력을 0/±90도 중 가장 '읽기 좋은(=가로형 선호)' 방향으로 보정.
+    - EXIF 보정 후 3가지 후보(0, +90, -90) 생성
+    - 학생증 키워드 개수, 한글량, 가로형 여부, 카드 비율을 기준으로 스코어링
+    - 최적 후보 파일 경로를 반환 (선택되지 않은 임시 파일은 정리)
+    """
+    fixed = autorotate_exif(path)
+    cands = [fixed, rotate90(fixed, cw=True), rotate90(fixed, cw=False)]
+    scored = []
+
+    for p in cands:
+        try:
+            with _open_exif_transposed(p) as img:
+                w, h = img.size
+            # OCR 라인 추출(신뢰도 하한 살짝 둠)
+            lines = ocr_lines_fn(p, conf_min=0.6)
+            text = " ".join(lines)
+
+            kw = sum(1 for k in _STUDENT_KWS if k.lower() in text.lower())
+            hangul = sum(1 for ch in text if "가" <= ch <= "힣")
+
+            # 가로형 보너스
+            landscape_bonus = 1 if w >= h else 0
+
+            # 카드 비율 보너스 (대략 1.3~2.2가 카드형)
+            ratio = card_aspect_ratio(p)
+            ratio_bonus = 1 if 1.2 <= ratio <= 2.5 else 0
+
+            # 최종 스코어(가중치는 경험적)
+            score = (kw * 3) + (hangul * 0.01) + (landscape_bonus * 2) + ratio_bonus
+            scored.append((score, p))
+        except Exception:
+            scored.append((0, p))
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+    best_path = scored[0][1]
+
+    # 선택되지 않은 후보 임시파일 정리
+    for _, p in scored[1:]:
+        try:
+            if os.path.exists(p):
+                os.unlink(p)
+        except Exception:
+            pass
+
+    return best_path

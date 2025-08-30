@@ -4,7 +4,8 @@ import shutil
 from typing import Optional
 
 from fastapi import APIRouter, UploadFile, File, HTTPException, Header
-
+from services.image_utils import ensure_landscape_for_student
+from services.common_ocr import clova_ocr
 from services.verify_student import validate_student_card
 from services.verify_license import validate_license_document
 
@@ -28,16 +29,24 @@ async def ocr_student(file: UploadFile = File(...), authorization: Optional[str]
         raise HTTPException(status_code=400, detail="파일명이 없습니다.")
     if file.content_type not in {"image/jpeg", "image/jpg", "image/png"}:
         raise HTTPException(status_code=400, detail="지원하지 않는 파일 형식입니다.")
-    path = save_temp_file(file)
+
+    original_path = save_temp_file(file)
+    processed_path = original_path
     try:
-        result = validate_student_card(path)
+        # ✅ 가로형 학생증 자동 방향 보정
+        processed_path = ensure_landscape_for_student(original_path, clova_ocr.ocr_lines)
+
+        result = validate_student_card(processed_path)
         result.setdefault("fields", {"name": "", "studentId": "", "university": ""})
         result.setdefault("documentType", "student")
         if not result.get("valid") and "오류" not in result.get("message", ""):
             result["message"] = "인증할 수 없는 학생증입니다."
         return result
     finally:
-        cleanup_temp_file(path)
+        # 임시파일 정리 (원본 + 보정본)
+        cleanup_temp_file(original_path)
+        if processed_path != original_path:
+            cleanup_temp_file(processed_path)
 
 @router.post("/professional")
 async def ocr_professional(file: UploadFile = File(...), authorization: Optional[str] = Header(None)):
