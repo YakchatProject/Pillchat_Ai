@@ -45,3 +45,4 @@ def validate_student_card(image_path: str) -> Dict:
         "text_length": len(full_text),
         "ocr_engine": "clova",
     }
+    

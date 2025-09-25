@@ -30,23 +30,17 @@ async def ocr_student(file: UploadFile = File(...), authorization: Optional[str]
     if file.content_type not in {"image/jpeg", "image/jpg", "image/png"}:
         raise HTTPException(status_code=400, detail="지원하지 않는 파일 형식입니다.")
 
-    original_path = save_temp_file(file)
-    processed_path = original_path
+    path = save_temp_file(file)
     try:
-        # ✅ 가로형 학생증 자동 방향 보정
-        processed_path = ensure_landscape_for_student(original_path, clova_ocr.ocr_lines)
-
-        result = validate_student_card(processed_path)
+        result = validate_student_card(path)
         result.setdefault("fields", {"name": "", "studentId": "", "university": ""})
         result.setdefault("documentType", "student")
         if not result.get("valid") and "오류" not in result.get("message", ""):
             result["message"] = "인증할 수 없는 학생증입니다."
         return result
     finally:
-        # 임시파일 정리 (원본 + 보정본)
-        cleanup_temp_file(original_path)
-        if processed_path != original_path:
-            cleanup_temp_file(processed_path)
+        cleanup_temp_file(path)
+
 
 @router.post("/professional")
 async def ocr_professional(file: UploadFile = File(...), authorization: Optional[str] = Header(None)):
