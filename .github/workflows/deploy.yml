@@ -1,0 +1,121 @@
+name: Deploy PillChat OCR to AWS ECS
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+env:
+  AWS_REGION: ap-northeast-2
+  ECR_REPOSITORY: pillchat-ocr
+  ECS_SERVICE: pillchat-ocr-service
+  ECS_CLUSTER: pillchat-ocr-cluster
+  ECS_TASK_DEFINITION: pillchat-ocr-task
+  CONTAINER_NAME: pillchat-ocr
+
+jobs:
+  deploy:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: Login to Amazon ECR
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v2
+
+    - name: Build, tag, and push image to Amazon ECR
+      id: build-image
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        IMAGE_TAG: ${{ github.sha }}
+      run: |
+        echo "Building Docker image..."
+        docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+        docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:latest .
+        
+        echo "Pushing Docker image to ECR..."
+        docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+        docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+        
+        echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
+
+    - name: Download current task definition
+      run: |
+        echo "Downloading current task definition..."
+        aws ecs describe-task-definition \
+          --task-definition $ECS_TASK_DEFINITION \
+          --query taskDefinition > task-definition.json
+
+    - name: Update task definition with new environment variables
+      run: |
+        echo "Updating task definition with secrets..."
+        jq --arg image "${{ steps.build-image.outputs.image }}" \
+           --arg clova_url "${{ secrets.CLOVA_OCR_URL }}" \
+           --arg clova_key "${{ secrets.CLOVA_SECRET_KEY }}" \
+          #  --arg internal_token "${{ secrets.OCR_INTERNAL_TOKEN }}" \
+           '
+           .containerDefinitions[0].image = $image |
+           .containerDefinitions[0].environment = [
+             {"name": "CLOVA_OCR_URL", "value": $clova_url},
+             {"name": "CLOVA_SECRET_KEY", "value": $clova_key},
+             {"name": "OCR_INTERNAL_TOKEN", "value": $internal_token},
+             {"name": "PYTHONPATH", "value": "/app"},
+             {"name": "PYTHONUNBUFFERED", "value": "1"}
+           ]
+           ' task-definition.json > updated-task-definition.json
+
+    - name: Deploy Amazon ECS task definition
+      uses: aws-actions/amazon-ecs-deploy-task-definition@v1
+      with:
+        task-definition: updated-task-definition.json
+        service: ${{ env.ECS_SERVICE }}
+        cluster: ${{ env.ECS_CLUSTER }}
+        wait-for-service-stability: true
+
+    - name: Verify deployment
+      run: |
+        echo "Waiting for deployment to complete..."
+        sleep 30
+        
+        echo "Getting service status..."
+        aws ecs describe-services \
+          --cluster $ECS_CLUSTER \
+          --services $ECS_SERVICE \
+          --query 'services[0].{Status:status,RunningCount:runningCount,DesiredCount:desiredCount}'
+
+    - name: Get ALB DNS name
+      run: |
+        echo "Getting Load Balancer DNS name..."
+        ALB_DNS=$(aws elbv2 describe-load-balancers \
+          --names pillchat-alb \
+          --query 'LoadBalancers[0].DNSName' \
+          --output text 2>/dev/null || echo "ALB not found")
+        
+        if [ "$ALB_DNS" != "ALB not found" ]; then
+          echo "🌐 Application URL: http://$ALB_DNS/ocr/health"
+          echo "🔗 Service endpoint: http://$ALB_DNS"
+        fi
+
+    - name: Send deployment notification
+      if: always()
+      run: |
+        if [ ${{ job.status }} == 'success' ]; then
+          echo "✅ 배포 성공!"
+          echo "📦 Image: ${{ steps.build-image.outputs.image }}"
+          echo "🕐 배포 시간: $(date)"
+          echo "🔄 Commit: ${{ github.sha }}"
+        else
+          echo "❌ 배포 실패!"
+          echo "🔍 로그를 확인하세요."
+        fi
